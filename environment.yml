@@ -1,0 +1,15 @@
+name: emergency-uav-agent
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+  - numpy>=2,<3
+  - pillow
+  - pydantic>=2,<3
+  - pytest
+  - pip
+  - setuptools
+  - wheel
+  - fastapi
+  - uvicorn
+  - websockets

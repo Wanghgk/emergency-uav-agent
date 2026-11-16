@@ -1,0 +1,6 @@
+{
+  "290": {"north": 950, "east": 1450, "expected_people": 5, "half_width": 40},
+  "28": {"north": 50, "east": -400, "expected_people": 1, "half_width": 40},
+  "372": {"north": -350, "east": -800, "expected_people": 2, "half_width": 40},
+  "370": {"north": -350, "east": -800, "expected_people": 2, "half_width": 40}
+}
