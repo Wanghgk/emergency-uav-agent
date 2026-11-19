@@ -68,6 +68,17 @@ tar -xf ".external\ESARMaps_win.zip" -C ".external" ESARMaps_win/aotai2800 ESARM
 
 ## 5. 验收仿真并生成第一份回放
 
+机队任务默认使用 YOLO11s-Pose 复核 RT-DETRv2 R18 的候选框。运行前在 CMD 下载两份固定版本的权重，并核对 SHA-256。可用 `--detector rtdetr` 比较未做姿态复核的结果，或用 `--detector yolox` 复现 YOLOX-Tiny。
+
+```cmd
+curl.exe -fL --retry 2 -o ".external\models\rtdetr_v2_r18vd.onnx" "https://huggingface.co/onnx-community/rtdetr_v2_r18vd-ONNX/resolve/1e28de7/onnx/model.onnx"
+certutil -hashfile ".external\models\rtdetr_v2_r18vd.onnx" SHA256
+curl.exe -fL --retry 2 -o ".external\models\yolo11s-pose.onnx" "https://huggingface.co/unileon-robotics/YOLO11-ONNX/resolve/307d2addf959c94d7caf7ed0e2048b54bf4cbea2/yolo11s-pose.onnx"
+certutil -hashfile ".external\models\yolo11s-pose.onnx" SHA256
+```
+
+RT-DETRv2 预期 SHA-256 为 `583a236ac21c95a7fd94f284fc21485e42355bfef82c27011ba78fbc09ee87e2`，YOLO11s-Pose 为 `5dc8b39e042dc44130e196ec3f1bcd346edf249e05963c3d6c2b506d01870600`。如果下载地址连接超时，可把 `huggingface.co` 替换为 `hf-mirror.com` 并再次核对哈希。[RT-DETRv2 ONNX](https://huggingface.co/onnx-community/rtdetr_v2_r18vd-ONNX/blob/1e28de7/onnx/model.onnx) · [YOLO11s-Pose ONNX](https://huggingface.co/unileon-robotics/YOLO11-ONNX/blob/307d2addf959c94d7caf7ed0e2048b54bf4cbea2/yolo11s-pose.onnx)
+
 ```cmd
 python -m pytest -q --basetemp .pytest-tmp
 ruff check --no-cache backend scripts tests
@@ -85,13 +96,19 @@ python -m scripts.run_rescue --task-id 290 --max-frames 4
 
 ## 6. 构建并打开网页
 
-从仓库根目录执行以下命令。按 `Ctrl+C` 停止服务。
+从仓库根目录执行以下命令构建前端。
 
 ```cmd
 cd frontend
 npm ci
 npm run build
 cd ..
+```
+
+单开一个 CMD 或 Anaconda Prompt，进入仓库根目录，手动启动 FastAPI 后端。运行期间保留这个窗口；任务结束或在网页暂停后，按 `Ctrl+C` 停止后端。
+
+```cmd
+conda activate emergency-uav-agent
 python -m uvicorn backend.api.main:app --host 127.0.0.1 --port 8000
 ```
 

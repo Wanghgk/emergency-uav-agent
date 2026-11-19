@@ -9,6 +9,8 @@ from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .ground_rescue import GroundDecision, TerrainInspection
+
 
 class SearchPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -51,6 +53,22 @@ class MockLLMProvider:
             return SearchDecision(action="finish", rationale=reason)
         return SearchDecision(action="continue", rationale="Search options remain.")
 
+    def inspect_ground(self, context):
+        return TerrainInspection(window_ids=list(context["inspection_windows"])[:2])
+
+    def choose_ground(self, context):
+        options = context["draft_routes"]
+        route = min(
+            options,
+            key=lambda name: (
+                options[name]["max_slope_deg"],
+                options[name]["distance_m"],
+            ),
+        )
+        return GroundDecision(
+            route_id=route, rationale="本地规则优先选择坡度较小的候选路线。"
+        )
+
 
 class OpenAICompatibleProvider:
     def __init__(
@@ -92,6 +110,27 @@ class OpenAICompatibleProvider:
             'Use a short Chinese rationale. Example JSON: {"action":"continue","rationale":"仍有待复查候选"}.'
         )
         return self._request(context, prompt, SearchDecision)
+
+    def inspect_ground(self, context):
+        return self._request(
+            context,
+            "Use terrain_overview to understand the full captured UE5 map and terrain_summary for the candidate corridors. "
+            "Choose one or two inspection_windows where slopes, blocked cells, or gaps need original-resolution checks. "
+            "TIN vertices are in north/east metres and each triangle is a plane. Treat null as missing data.",
+            TerrainInspection,
+        )
+
+    def choose_ground(self, context):
+        return self._request(
+            context,
+            "Compare draft_routes against the whole-map TIN, the corridor TIN and the original-resolution TIN windows. "
+            "The blocked-cell mask overrides the interpolated surface; a smooth triangle does not prove traversability. "
+            "Use ascent, slope, total distance and distance to the observed person to select a route ID. "
+            "Surface elevation can represent vegetation or snow and is not verified ground. "
+            "Return a null route_id if the evidence is inadequate to select an approach. "
+            "Explain the choice briefly in Chinese without inventing trails or ground conditions.",
+            GroundDecision,
+        )
 
     def _request(self, context, prompt, schema):
         headers = {"Content-Type": "application/json"}

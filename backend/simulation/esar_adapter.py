@@ -16,6 +16,7 @@ class PublicTask(BaseModel):
     prompt: str
     weather_id: int = Field(ge=0, le=12)
     time_of_day: int = Field(ge=0, le=2400)
+    original_time_of_day: int | None = Field(default=None, ge=0, le=2400)
 
 
 def load_task(esar: Path, task_file: str, task_id: int):
@@ -27,6 +28,9 @@ def load_task(esar: Path, task_file: str, task_id: int):
         )
     task = matches[0]
     public = PublicTask.model_validate(task)
+    if not 700 <= public.time_of_day < 1800:
+        public.original_time_of_day = public.time_of_day
+        public.time_of_day = 1200
 
     path = esar / "source" / "coordinate_utils.py"
     spec = spec_from_file_location("official_esar_coordinate_utils", path)

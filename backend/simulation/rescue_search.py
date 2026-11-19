@@ -1,13 +1,14 @@
 """Local SAR coverage and scoring primitives for ESAR simulation."""
 
 import math
+import re
 from dataclasses import dataclass, field
 
 import numpy as np
 
-from .basemap import CAMERA
+from .basemap import read_terrain_down
 from .coordinate_transform import ned_to_ue
-from .observation_collector import vector
+from .observation_collector import Observation
 
 
 @dataclass(frozen=True)
@@ -81,12 +82,70 @@ def person_results(tracks, origin):
             "ned_m": track.point,
             "ue_cm": ned_to_ue(track.point, origin),
             "observations": len(track.observations),
+            "horizontal_observation_spread_m": (
+                round(
+                    max(
+                        math.dist(track.point[:2], point[:2])
+                        for point in track.observations.values()
+                    ),
+                    2,
+                )
+                if len(track.observations) >= 2
+                else None
+            ),
             "evidence": max(
                 track.evidence.values(), key=lambda item: item["confidence"]
             ),
         }
         for index, track in enumerate(tracks, 1)
     ]
+
+
+def archived_people(run, observations):
+    if "people_results" in run:
+        return run["people_results"]
+    failed_fleet = run.get("profile") == "fleet" and run.get("status") == "failed"
+    if not run.get("alarm") or (
+        not failed_fleet and run.get("status") not in {"finished", "interrupted"}
+    ):
+        return []
+    delivered = (
+        {
+            event["observation_id"]
+            for event in run["events"]
+            if event["type"] == "fleet_feedback"
+        }
+        if failed_fleet
+        else None
+    )
+    alarm = Alarm(
+        **{key: value for key, value in run["alarm"].items() if key != "source"}
+    )
+    tracks = []
+    origin = None
+    for event in run["events"]:
+        if (
+            event["type"] != "observation"
+            or event.get("sector") == "START"
+            or not event.get("detections")
+        ):
+            continue
+        frame_id = event["frame_id"]
+        if delivered is not None and frame_id not in delivered:
+            continue
+        if not re.fullmatch(r"[0-9a-f]{32}", frame_id):
+            continue
+        try:
+            frame = Observation.model_validate_json(
+                (observations / frame_id / "observation.json").read_bytes()
+            )
+        except (OSError, ValueError):
+            continue
+        if frame.run_id != run["run_id"] or frame.task_id != run["task"]["task_id"]:
+            continue
+        origin = frame.map_origin_ue_cm
+        track_detections(tracks, frame_id, event["detections"], alarm)
+    return person_results(tracks, origin) if origin is not None else []
 
 
 def review_search(provider, tracks, expected, can_continue):
@@ -151,25 +210,22 @@ class Terrain:
         self.bounds = basemap.bounds()
         self.image = image
 
+    def save(self, path, task):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("wb") as output:
+            np.savez_compressed(
+                output,
+                down=self.image,
+                task_id=task.task_id,
+                map_id=task.map_name,
+                **self.bounds,
+            )
+
     @classmethod
     def read(cls, client, api, basemap):
-        [response] = client.simGetImages(
-            [api.ImageRequest(CAMERA, api.ImageType.DepthPlanar, True, False)],
-            external=True,
-        )
-        if (
-            math.dist(vector(response.camera_position), basemap.camera_pose.position)
-            > 0.1
-        ):
-            raise ValueError("terrain RGB and depth poses disagree")
-        depth = np.asarray(response.image_data_float).reshape(
-            response.height, response.width
-        )
-        valid = np.isfinite(depth) & (depth > 1) & (depth < 3000)
-        height = np.where(valid, depth + basemap.camera_pose.position[2], np.nan)
-        return cls(basemap, height)
+        return cls(basemap, read_terrain_down(client, api, basemap))
 
-    def highest(self, a, b):
+    def profile(self, a, b):
         distance = math.dist(a, b)
         north, east = np.linspace(a, b, max(2, math.ceil(distance / 2) + 1)).T
         height, width = self.image.shape
@@ -192,4 +248,7 @@ class Terrain:
         )
         if np.any(~np.isfinite(surfaces)):
             raise ValueError("flight corridor contains missing terrain depth")
-        return float(np.min(surfaces))
+        return np.min(surfaces, axis=0)
+
+    def highest(self, a, b):
+        return float(np.min(self.profile(a, b)))

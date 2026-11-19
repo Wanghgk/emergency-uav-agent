@@ -1,0 +1,5 @@
+{
+  "lopnur": {"north": 1380.0, "east": 1320.0, "reference_down_m": 2.0, "label": "北侧远端开阔地"},
+  "aotai2800": {"north": -25.0, "east": -10.0, "reference_down_m": -3.125, "label": "东侧远端缓坡入口"},
+  "k2": {"north": 55.0, "east": -780.0, "reference_down_m": 190.65, "label": "北侧远端雪坡入口"}
+}

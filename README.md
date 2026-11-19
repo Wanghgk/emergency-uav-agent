@@ -1,19 +1,25 @@
 # Emergency-UAV-Agent
 
+三机搜救的 Windows 启动方式见 [三机任务](docs/fleet-mission.md)。地面救援路线见 [规划与回放](docs/ground-rescue.md)，实验结果见 [地形表示对比](docs/terrain-representations.md)。
+
 基于 ESARBench 的无人机应急搜救仿真平台。无人机从官方起点飞往模拟报警区，采集 RGB-D、检测人员并估计三维位置。搜索结束后，网页可在正射底图上回放航迹，查看人员位置、对应照片和复核状态。
+
+人员检测使用可见光 RGB，深度用于空间定位。启动仿真时，原设定早于 07:00 或从 18:00 起的任务统一改在 12:00 运行，保留官方天气设置，并在任务记录中保留原始时间。
 
 ## 安装和部署
 
 首次在另一台电脑使用，请从 [Windows 逐步部署指南](docs/deployment-windows.md) 开始。该指南包含从 GitHub 克隆、创建 Conda 环境、获取官方资源、运行仿真和打开网页的 CMD 命令。
 
-完成首次部署后，在仓库根目录的 CMD 或 Anaconda Prompt 启动网页服务。
+完成首次部署后，单开一个 CMD 或 Anaconda Prompt，在仓库根目录手动启动 FastAPI 后端。前端开发服务只转发 API 请求，后端由这个窗口单独运行。
 
 ```cmd
 conda activate emergency-uav-agent
 python -m uvicorn backend.api.main:app --host 127.0.0.1 --port 8000
 ```
 
-打开 [搜救回放](http://127.0.0.1:8000/)。在另一个已激活同一 Conda 环境的 CMD 窗口从仓库根目录运行任务，生成本机观测记录。
+打开 [搜救回放](http://127.0.0.1:8000/)，点击「启动新任务」卡片里的「选择地图和任务」即可启动机队。也可以在另一个已激活同一 Conda 环境的 CMD 窗口运行任务脚本。
+
+对从当前网页服务启动的机队任务，可以在任务选择栏点击「暂停任务」。暂停会结束本次仿真并保留已经采集的观测；如需再执行，请启动新任务。点击「删除任务」并确认会永久删除任务和观测。删除正在启动或运行的任务时，网页会先停止自己启动的仿真。
 
 ```cmd
 python -m scripts.run_rescue --task-id 290

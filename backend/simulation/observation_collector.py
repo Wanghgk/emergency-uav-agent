@@ -29,6 +29,7 @@ class Observation(BaseModel):
     task_id: int
     frame_id: str
     run_id: str | None = None
+    vehicle_name: str = "Drone0"
     timestamp: AwareDatetime
     rgb_timestamp_ns: int = Field(gt=0)
     depth_timestamp_ns: int = Field(gt=0)
@@ -52,18 +53,17 @@ def vector(value) -> Point:
     return value.x_val, value.y_val, value.z_val
 
 
-def pose(position, orientation) -> Pose:
+def pose(position, orientation, offset: Point = (0, 0, 0)) -> Pose:
     return Pose(
-        position=vector(position),
+        position=tuple(a + b for a, b in zip(vector(position), offset, strict=True)),
         orientation_xyzw=(*vector(orientation), orientation.w_val),
     )
 
 
 def capture(
-    client, api, task, origin: Point
+    client, api, task, origin: Point, *, vehicle="Drone0", offset: Point = (0, 0, 0)
 ) -> tuple[Observation, Image.Image, np.ndarray]:
     camera = "front_camera"
-    vehicle = "Drone0"
     info = client.simGetCameraInfo(camera, vehicle_name=vehicle)
     rgb, depth = client.simGetImages(
         [
@@ -74,7 +74,7 @@ def capture(
     )
     state = client.getMultirotorState(vehicle_name=vehicle)
     kinematics = state.kinematics_estimated
-    drone = pose(kinematics.position, kinematics.orientation)
+    drone = pose(kinematics.position, kinematics.orientation, offset)
     image = Image.open(BytesIO(bytes(rgb.image_data_uint8))).convert("RGB")
     if image.size != (rgb.width, rgb.height):
         raise ValueError("RGB dimensions differ from the AirSim response")
@@ -84,6 +84,7 @@ def capture(
     observation = Observation(
         map_id=task.map_name,
         task_id=task.task_id,
+        vehicle_name=vehicle,
         frame_id=uuid4().hex,
         timestamp=datetime.now(UTC),
         rgb_timestamp_ns=rgb.time_stamp,
@@ -92,8 +93,8 @@ def capture(
         drone_position=drone.position,
         drone_orientation=drone.orientation_xyzw,
         camera_name=camera,
-        camera_pose=pose(rgb.camera_position, rgb.camera_orientation),
-        depth_camera_pose=pose(depth.camera_position, depth.camera_orientation),
+        camera_pose=pose(rgb.camera_position, rgb.camera_orientation, offset),
+        depth_camera_pose=pose(depth.camera_position, depth.camera_orientation, offset),
         camera_intrinsics=Intrinsics.from_horizontal_fov(
             rgb.width, rgb.height, info.fov
         ),

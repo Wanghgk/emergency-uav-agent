@@ -112,3 +112,22 @@ def test_official_lopnur_task_and_launch_config(tmp_path):
     command = launch_args(tmp_path, upstream / "settings" / "settings.json", task)
     assert command[0] == str(executable)
     assert command[1:4] == ["-TaskNum=14", "-Weather=4", "-Time=1600"]
+    assert task.original_time_of_day is None
+
+
+def test_official_night_task_launches_at_noon(tmp_path):
+    upstream = Path(".external/ESAR-pinned")
+    if not upstream.is_dir():
+        pytest.skip("download the pinned official ESAR source to test K2 task 372")
+    task, _, _ = load_task(upstream, "task_data.json", 372)
+    assert task.original_time_of_day == 180
+    assert task.time_of_day == 1200
+    executable = tmp_path / "k2" / "k2.exe"
+    executable.parent.mkdir()
+    executable.touch()
+    command = launch_args(tmp_path, upstream / "settings" / "settings.json", task)
+    assert command[1:4] == [
+        f"-TaskNum={task.snapshot_id % 15}",
+        "-Weather=1",
+        "-Time=1200",
+    ]

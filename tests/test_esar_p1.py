@@ -1,6 +1,8 @@
 from math import dist
 
+import numpy as np
 import pytest
+from PIL import Image
 from pydantic import ValidationError
 
 from backend.brain.planning import (
@@ -9,7 +11,7 @@ from backend.brain.planning import (
     SearchPlan,
     select_plan,
 )
-from backend.simulation.basemap import Basemap
+from backend.simulation.basemap import Basemap, terrain_relief, visible_rgb
 from backend.simulation.coordinate_transform import Pose
 from scripts.run_mission import sample_legs, sector_route
 
@@ -33,6 +35,29 @@ def test_basemap_bounds_in_air_sim_metres():
             "east": 1932.5,
         }
     )
+
+
+def test_dark_basemap_preserves_image_detail_or_uses_depth():
+    dim = Image.fromarray(np.tile(np.arange(7, 47, dtype=np.uint8), (40, 1)))
+    corrected, kind = visible_rgb(dim.convert("RGB"))
+    assert kind == "rgb_enhanced"
+    assert corrected.size == dim.size
+    assert np.median(np.asarray(corrected)) >= 100
+    assert np.asarray(corrected).std() > 3
+    assert visible_rgb(Image.new("RGB", dim.size)) == (None, "depth_relief")
+
+    meta = Basemap(
+        map_id="k2",
+        task_id=372,
+        camera_pose=Pose(position=(0, 0, -50), orientation_xyzw=(0, 0, 0, 1)),
+        width_px=40,
+        height_px=40,
+        width_m=30,
+    )
+    y, x = np.indices((12, 12), dtype=float)
+    relief = np.asarray(terrain_relief((x - 6) ** 2 + y, meta))
+    assert relief.shape == (40, 40, 3)
+    assert relief.min() >= 140 and relief.std() > 3
 
 
 def test_replanning_uses_available_sector():

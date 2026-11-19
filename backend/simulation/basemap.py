@@ -1,8 +1,10 @@
 """Capture an orthographic ESAR terrain raster with NED bounds in metres."""
 
 import json
+import math
 from io import BytesIO
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from PIL import Image
@@ -24,6 +26,7 @@ class Basemap(BaseModel):
     width_px: int = Field(gt=0)
     height_px: int = Field(gt=0)
     width_m: float = Field(gt=0)
+    render_source: Literal["rgb", "rgb_enhanced", "depth_relief"] = "rgb"
 
     def bounds(self):
         north, east, _ = self.camera_pose.position
@@ -37,14 +40,21 @@ class Basemap(BaseModel):
         }
 
 
-def map_settings(source: Path, destination: Path, origin, *, search_camera=False):
+def map_settings(
+    source: Path,
+    destination: Path,
+    origin,
+    *,
+    search_camera=False,
+    camera_size=(768, 384),
+):
     settings = json.loads(source.read_text(encoding="utf-8"))
     if search_camera:
         front = settings["Vehicles"]["Drone0"]["Cameras"]["front_camera"][
             "CaptureSettings"
         ]
         for entry in front:
-            resolution = {0: 768, 1: 384}.get(entry["ImageType"])
+            resolution = dict(enumerate(camera_size)).get(entry["ImageType"])
             if resolution:
                 entry.update(Width=resolution, Height=resolution)
     north, east, down = origin
@@ -75,14 +85,67 @@ def map_settings(source: Path, destination: Path, origin, *, search_camera=False
     destination.write_text(json.dumps(settings), encoding="utf-8")
 
 
+def read_terrain_down(client, api, basemap: Basemap) -> np.ndarray:
+    [response] = client.simGetImages(
+        [api.ImageRequest(CAMERA, api.ImageType.DepthPlanar, True, False)],
+        external=True,
+    )
+    camera = pose(response.camera_position, response.camera_orientation)
+    if math.dist(camera.position, basemap.camera_pose.position) > 0.1 or not np.isclose(
+        abs(np.dot(camera.orientation_xyzw, basemap.camera_pose.orientation_xyzw)),
+        1,
+        atol=1e-4,
+    ):
+        raise ValueError("terrain RGB and depth poses disagree")
+    if response.width * basemap.height_px != response.height * basemap.width_px:
+        raise ValueError("terrain RGB and depth aspect ratios disagree")
+    depth = np.asarray(response.image_data_float).reshape(
+        response.height, response.width
+    )
+    valid = np.isfinite(depth) & (depth > 1) & (depth < 3000)
+    return np.where(valid, depth + basemap.camera_pose.position[2], np.nan)
+
+
+def visible_rgb(image: Image.Image):
+    light = np.asarray(image.convert("L"))
+    shadows, median, white = np.percentile(light, [10, 50, 98])
+    if white < 16 or light.std() < 3:
+        return None, "depth_relief"
+    if median < 100 or shadows < 30:
+        levels = [
+            round(70 + 185 * min(1, value / max(white, 48)) ** 0.55)
+            for value in range(256)
+        ]
+        return image.point(levels * 3), "rgb_enhanced"
+    return image, "rgb"
+
+
+def terrain_relief(down: np.ndarray, basemap: Basemap) -> Image.Image:
+    if min(down.shape) < 2 or not np.isfinite(down).any():
+        raise ValueError("no terrain depth available for the basemap")
+    pixel_m = basemap.width_m / down.shape[1]
+    dy, dx = np.gradient(down, pixel_m)
+    shade = np.nan_to_num((dx + dy) / np.sqrt(2 * (1 + dx**2 + dy**2)))
+    light = (193 + 53 * shade).astype(np.uint8)
+    return (
+        Image.fromarray(light)
+        .resize((basemap.width_px, basemap.height_px), Image.Resampling.BILINEAR)
+        .convert("RGB")
+    )
+
+
 def capture_basemap(client, api, task, output: Path):
     info = client.simGetCameraInfo(CAMERA, external=True)
     [response] = client.simGetImages(
         [api.ImageRequest(CAMERA, api.ImageType.Scene, False, True)], external=True
     )
-    image = Image.open(BytesIO(bytes(response.image_data_uint8))).convert("RGB")
-    if image.size != (RESOLUTION, RESOLUTION) or np.asarray(image).std() < 3:
-        raise ValueError("AirSim did not render the configured terrain camera")
+    try:
+        with Image.open(BytesIO(bytes(response.image_data_uint8))) as scene:
+            image, source = visible_rgb(scene.convert("RGB"))
+            if scene.size != (RESOLUTION, RESOLUTION):
+                image, source = None, "depth_relief"
+    except OSError:
+        image, source = None, "depth_relief"
     camera = pose(response.camera_position, response.camera_orientation)
     # A nadir camera with yaw zero puts North at the top and East at the right.
     forward = rotate(np.array([1, 0, 0]), camera.orientation_xyzw)
@@ -107,13 +170,18 @@ def capture_basemap(client, api, task, output: Path):
         map_id=task.map_name,
         task_id=task.task_id,
         camera_pose=camera,
-        width_px=image.width,
-        height_px=image.height,
+        width_px=RESOLUTION,
+        height_px=RESOLUTION,
         width_m=WIDTH_M,
+        render_source=source,
     )
+    if image is None:
+        image = terrain_relief(read_terrain_down(client, api, meta), meta)
     folder = output / f"{task.map_name}-{task.task_id}"
     folder.mkdir(parents=True, exist_ok=True)
-    image.save(folder / "terrain.webp", quality=91)
+    temporary = folder / "terrain.tmp"
+    image.save(temporary, format="WEBP", quality=91)
+    temporary.replace(folder / "terrain.webp")
     (folder / "basemap.json").write_text(
         meta.model_dump_json(indent=2), encoding="utf-8"
     )
